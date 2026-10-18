@@ -5,6 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: '/smart-lost-found-system/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
