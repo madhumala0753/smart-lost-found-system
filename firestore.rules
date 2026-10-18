@@ -1,0 +1,177 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'pmadhumala75@gmail.com') ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'fullName', 'email', 'role']) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.fullName is string && data.fullName.size() > 0 && data.fullName.size() <= 100 &&
+             data.email is string && data.email.size() <= 150 &&
+             data.role in ['user', 'admin'];
+    }
+
+    function isValidItem(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'ownerName', 'reportType', 'itemName', 'category', 'description', 'location', 'eventDate', 'status']) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.ownerId is string && data.ownerId.size() <= 128 &&
+             data.ownerName is string && data.ownerName.size() <= 100 &&
+             data.reportType in ['lost', 'found'] &&
+             data.itemName is string && data.itemName.size() > 0 && data.itemName.size() <= 120 &&
+             data.category is string && data.category.size() <= 60 &&
+             data.description is string && data.description.size() <= 1500 &&
+             data.location is string && data.location.size() <= 150 &&
+             data.eventDate is string && data.eventDate.size() <= 20 &&
+             data.status in ['Pending Review', 'Active', 'Matched', 'Claim Pending', 'Returned / Resolved', 'Rejected', 'Closed'];
+    }
+
+    function isValidClaim(data) {
+      return data.keys().hasAll(['id', 'itemId', 'itemTitle', 'ownerId', 'claimantId', 'claimantName', 'explanation', 'status']) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.itemId is string && data.itemId.size() <= 128 &&
+             data.itemTitle is string && data.itemTitle.size() <= 120 &&
+             data.ownerId is string && data.ownerId.size() <= 128 &&
+             data.claimantId is string && data.claimantId.size() <= 128 &&
+             data.claimantName is string && data.claimantName.size() <= 100 &&
+             data.explanation is string && data.explanation.size() > 0 && data.explanation.size() <= 2000 &&
+             data.status in ['Pending', 'Under Review', 'Approved', 'Rejected', 'Completed'];
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'message', 'type', 'read']) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.title is string && data.title.size() <= 150 &&
+             data.message is string && data.message.size() <= 500 &&
+             data.type in ['match', 'claim_created', 'claim_approved', 'claim_rejected', 'status_change', 'item_resolved', 'system'] &&
+             data.read is bool;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['id', 'actorId', 'actorEmail', 'action', 'targetType', 'targetId', 'details']) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.actorId is string && data.actorId.size() <= 128 &&
+             data.actorEmail is string && data.actorEmail.size() <= 150 &&
+             data.action is string && data.action.size() <= 100 &&
+             data.targetType in ['item', 'claim', 'user', 'system'] &&
+             data.targetId is string && data.targetId.size() <= 128 &&
+             data.details is string && data.details.size() <= 1000;
+    }
+
+    // Health / connectivity check endpoint
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && request.auth.uid == userId && isValidUser(incoming()) &&
+                       (incoming().role == 'user' || isAdmin());
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && isValidUser(incoming()) &&
+                       (incoming().role == existing().role || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Admins lookup table
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Lost and Found items (Public read for campus search; authenticated write with strict ownership validation)
+    match /items/{itemId} {
+      allow get: if true;
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(itemId) && isValidItem(incoming()) &&
+                       incoming().ownerId == request.auth.uid && incoming().id == itemId;
+      allow update: if isSignedIn() && isValidId(itemId) && isValidItem(incoming()) && (
+        isAdmin() ||
+        (
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id &&
+          (
+            // Item owner updating their report before resolution
+            (existing().ownerId == request.auth.uid && existing().status != 'Returned / Resolved') ||
+            // Claim status progression
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        )
+      );
+      allow delete: if isSignedIn() && (
+        isAdmin() ||
+        (existing().ownerId == request.auth.uid && existing().status != 'Returned / Resolved')
+      );
+    }
+
+    // Claims
+    match /claims/{claimId} {
+      allow get: if isSignedIn() && (
+        resource.data.claimantId == request.auth.uid ||
+        resource.data.ownerId == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.claimantId == request.auth.uid ||
+        resource.data.ownerId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isSignedIn() && isValidId(claimId) && isValidClaim(incoming()) &&
+                       incoming().claimantId == request.auth.uid &&
+                       incoming().status == 'Pending';
+      allow update: if isSignedIn() && isValidId(claimId) && isValidClaim(incoming()) && (
+        isAdmin() ||
+        // Item owner can review and change status
+        (existing().ownerId == request.auth.uid && incoming().claimantId == existing().claimantId) ||
+        // Claimant can withdraw or update non-decision fields
+        (existing().claimantId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['explanation', 'identifyingDetails', 'supportingInfo', 'updatedAt']))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming());
+      allow update: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+      allow delete: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // Audit Logs
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && isValidId(logId) && isValidAuditLog(incoming());
+      allow update, delete: if false;
+    }
+  }
+}

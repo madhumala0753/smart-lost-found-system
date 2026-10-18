@@ -1,0 +1,6 @@
+{
+  "name": "CampusVault — Smart Lost and Found System",
+  "description": "A comprehensive smart lost and found management platform for college campuses featuring report tracking, smart matching, secure claim workflows, and administrator controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
