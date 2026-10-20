@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './AuthContext';
 import { testConnection } from './services/firebase';
-import { subscribeToAllItems } from './services/itemService';
+import { subscribeToAllItems } from './itemService';
 import {
   subscribeToClaimsByClaimant,
   subscribeToClaimsForOwner,
